@@ -1,0 +1,41 @@
+{
+  "name": "foxy",
+  "version": "1.1.63",
+  "description": "فوكسي: ثعلب يعيش فوق صندوق المحادثة، يتابع تقدّم مشروعك ويسولف. لوحة حيّة بمراحل المشروع وفريقه من docs/FOXY.json.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Hussain / Arya Tech"
+  },
+  "userConfig": {
+    "linesUrl": {
+      "type": "string",
+      "title": "رابط جمل الثعلب",
+      "description": "رابط ملف JSON فيه قائمة جمل؛ الثعلب يقرأه كل عشر دقائق ويضيف جمله إلى بنكه.",
+      "default": ""
+    },
+    "rssUrl": {
+      "type": "string",
+      "title": "رابط أخبار RSS",
+      "description": "فاضي = أخبار كلود وأدوات المونتاج والتصميم وتقنية الكويت. أو حط رابط RSS تختاره.",
+      "default": ""
+    },
+    "smartLines": {
+      "type": "boolean",
+      "title": "جمل ذكية بسونيت",
+      "description": "مرة كل ساعة يكتب سونيت 5.5 عشر جمل: أفكار للمشروع، تلميحات كلود، وأخبار. تكلفة الساعة أقل من سنت.",
+      "default": true
+    },
+    "model": {
+      "type": "string",
+      "title": "الموديل",
+      "description": "الموديل الذي يكتب الجمل الذكية.",
+      "default": "claude-sonnet-5-5"
+    },
+    "serverUrl": {
+      "type": "string",
+      "title": "سيرفر فوكسي",
+      "description": "منه يتحدّث فوكسي بروحه كل عشر دقايق، وعليه رسائل الغرفة.",
+      "default": "https://foxy.169.58.109.111.sslip.io"
+    }
+  }
+}
