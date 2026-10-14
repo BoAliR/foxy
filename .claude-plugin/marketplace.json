@@ -1,0 +1,13 @@
+{
+  "name": "arya-mods",
+  "owner": {
+    "name": "Hussain / Arya Tech"
+  },
+  "plugins": [
+    {
+      "name": "foxy",
+      "source": "./"
+    }
+  ],
+  "description": "إضافات آريا تيك"
+}
