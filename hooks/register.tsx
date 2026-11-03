@@ -82,14 +82,6 @@ export const makeNow = (path: string): string =>
     '`s` owner = waits on the user. 5-9 stages, short titles, statuses true to what you found (never guessed as done).',
     'Then reply with one short line saying it is ready; do not list the file back.',
   ].join(' ')
-const rule = (path: string): string =>
-  [
-    `Foxy's map of this project is kept in ${path}, and a pane shows it to the user live, so it must always be current.`,
-    'In the same turn that a step is finished, started, blocked on the user, added or dropped, or a release ships: re-read the file (the user changes it from the pane), then update that step\'s `s` (done | doing | todo | owner) and the top-level `updated` date.',
-    'Work that is not part of the project\'s goal (side topics raised in the conversation, such as tooling or this pane) goes in the top-level `side` list, with the same fields, not in a stage.',
-    'Before the final reply of EVERY turn, record what the turn worked on: set the top-level `focus` to { "t": "<a few words, in the user\'s language>", "side": true|false } (side = not part of the project\'s goal), and when it is side work add it to `side` or update its item (`s`: doing while it is in progress, done once the user confirmed it, owner while it waits for the user).',
-    'Never rewrite the file from memory.',
-  ].join(' ')
 // Where the map is made when a project has none.
 const outside = FILES[0] ?? 'docs/FOXY.json'
 const places = (): string[] => FILES
@@ -1119,6 +1111,80 @@ const remark = async ($: EngineInterface) => {
   await say($, verdict.line, verdict.off ? 'dance' : 'jump')
 }
 
+// Foxy keeps the map current by itself: no word of it reaches the agent. Each answer of the
+// main loop is noted (what was asked, how the agent answered, both cut short), and once an
+// hour a small model reads those notes against the open steps and says which moved. Foxy
+// re-reads the file and writes only those changes, so the agent's own context stays clean.
+type Worked = { asked: string; answer: string }
+let worked: Worked[] = []
+let tracked = 0
+const STATES = ['done', 'doing', 'todo', 'owner']
+// The open steps as short ids: `2.4` the fifth step of the third stage, `2.4.1` one of its own.
+export const openSteps = (map: FoxyMap): string[] =>
+  (Array.isArray(map.stages) ? map.stages : []).flatMap((stage, a) =>
+    (Array.isArray(stage.items) ? stage.items : []).flatMap((item, b) => [
+      ...(item.s !== 'done' ? [`${a}.${b} [${item.s}] ${String(item.t).slice(0, 70)}`] : []),
+      ...(Array.isArray(item.sub) ? item.sub : []).flatMap((one, c) => (one.s !== 'done' ? [`${a}.${b}.${c} [${one.s}] ${String(one.t).slice(0, 60)}`] : [])),
+    ]),
+  ).slice(0, 150)
+export const trackPrompt = (map: FoxyMap, log: Worked[]): string =>
+  [
+    'You keep a project map current by reading what was done. You are not the coding agent and you change nothing else.',
+    `Goal: ${map.goal}.`,
+    `Open steps (id [state] title):\n${openSteps(map).join('\n')}`,
+    `What happened since your last look, oldest first (user asked -> agent answered):\n${log.map(one => `- ${one.asked} -> ${one.answer}`).join('\n')}`,
+    'Change a step only when the log clearly shows it: done when finished, doing when started, owner when it waits on the user. Never guess.',
+    'Reply with JSON only: {"set": {"<id>": "done"|"doing"|"todo"|"owner"}, "focus": {"t": "<a few words in the user\'s language>", "side": true|false}}. side = the work is not part of the goal. An empty set is fine.',
+  ].join('\n')
+export const parseTrack = (text: string): { set: Record<string, string>; focus?: { t: string; side: boolean } } => {
+  try {
+    const got = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) as { set?: unknown; focus?: { t?: unknown; side?: unknown } }
+    const set = Object.fromEntries(
+      Object.entries(got.set && typeof got.set === 'object' ? (got.set as Record<string, unknown>) : {}).filter(
+        (pair): pair is [string, string] => /^\d+\.\d+(\.\d+)?$/.test(pair[0]) && typeof pair[1] === 'string' && STATES.includes(pair[1]),
+      ),
+    )
+    const focus = typeof got.focus?.t === 'string' && got.focus.t.trim() !== '' ? { t: got.focus.t.trim().slice(0, 60), side: got.focus.side === true } : undefined
+
+    return { set, focus }
+  } catch {
+    return { set: {} }
+  }
+}
+export const applyTrack = (map: FoxyMap, told: ReturnType<typeof parseTrack>, day: string): FoxyMap => {
+  const stages = map.stages.map((stage, a) => ({
+    ...stage,
+    items: stage.items.map((item, b) => ({
+      ...item,
+      s: told.set[`${a}.${b}`] ?? item.s,
+      ...(Array.isArray(item.sub) ? { sub: item.sub.map((one, c) => ({ ...one, s: told.set[`${a}.${b}.${c}`] ?? one.s })) } : {}),
+    })),
+  }))
+  const isChanged = Object.keys(told.set).length > 0
+
+  return { ...map, stages, ...(told.focus ? { focus: told.focus } : {}), ...(isChanged ? { updated: day } : {}) }
+}
+const track = async ($: EngineInterface) => {
+  const at = await $.clock.now()
+  if (worked.length === 0 || at - tracked < 3600000 || isBusy) return
+  tracked = at
+  const before = await found($)
+  if (typeof before.text !== 'string' || before.path === '') return
+  const log = worked
+  const map0 = JSON.parse(before.text) as FoxyMap
+  if (openSteps(map0).length === 0) return
+  const reply = await $.model.complete({ model: modelId, prompt: trackPrompt(map0, log), maxTokens: 300, timeoutMs: 60000 }).catch(() => undefined)
+  if (!reply || !reply.isAnswered) return
+  worked = worked.slice(log.length)
+  const told = parseTrack(reply.text)
+  if (Object.keys(told.set).length === 0 && !told.focus) return
+  // the file as it is now: the user may have pressed a step meanwhile
+  const now = await found($)
+  if (typeof now.text !== 'string' || now.path === '') return
+  await $.fs.write(now.path, `${JSON.stringify(applyTrack(JSON.parse(now.text) as FoxyMap, told, new Date(at).toISOString().slice(0, 10)), null, 2)}\n`)
+  await sync($).catch(() => undefined)
+}
+
 // The hour's reply: ten lines, and for a headline the longer story behind it, by its line.
 // An older reply, a bare array of lines, is read as lines with no stories.
 export const parseThought = (text: string): { lines: string[]; more: Record<string, string> } => {
@@ -1622,6 +1688,7 @@ export const register: Register = (on, options) => {
     $.clock.every(600000, () => void fetchLines($).catch(() => undefined))
     $.clock.after(20000, () => void think($).catch(() => undefined))
     $.clock.every(900000, () => void think($).catch(() => undefined))
+    $.clock.every(600000, () => void track($).catch(() => undefined))
     $.clock.after(30000, () => void refresh($).catch(() => undefined))
     $.clock.every(600000, () => void refresh($).catch(() => undefined))
     await whoAmI($).catch(() => undefined)
@@ -1692,6 +1759,10 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     isBusy = false
+    const ended = e as { answer?: unknown; agentId?: unknown; reason?: unknown }
+    if (ended.agentId === undefined && ended.reason === 'answer' && typeof ended.answer === 'string' && ended.answer.trim() !== '') {
+      worked = [...worked, { asked: (recent[recent.length - 1] ?? '').slice(0, 200), answer: ended.answer.trim().slice(0, 400) }].slice(-15)
+    }
     if (wantsMap) {
       if ((await found($)).path !== '') wantsMap = false
       else if (asks < 2) {
@@ -1710,16 +1781,13 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // What keeps the file itself current: the model is told, in every request of a session
-  // whose project has Foxy's map, to update it in the same turn the work changes.
+  // Only /foxy speaks to the agent, and only once, to make the map; after that Foxy keeps it
+  // current by itself (`track`) and adds nothing to any request.
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
-    const at = (await found($)).path
-    if (at === '' && !wantsMap) return result
+    if (!wantsMap || (await found($)).path !== '') return result
 
-    return at !== ''
-      ? { ...result, sections: [...result.sections, { id: 'foxy:keep-current', text: rule(at), scope: 'session' as const }] }
-      : { ...result, sections: [...result.sections, { id: 'foxy:make-one', text: `The user ran /foxy. ${makeNow(outside)} Do it first in your next reply, whatever the user wrote, then carry on with what they asked.`, scope: 'session' as const }] }
+    return { ...result, sections: [...result.sections, { id: 'foxy:make-one', text: `The user ran /foxy. ${makeNow(outside)} Do it first in your next reply, whatever the user wrote, then carry on with what they asked.`, scope: 'session' as const }] }
   })
 
   // Every value from the state is taken as what it is and nothing more (a string, an array
