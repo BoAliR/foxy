@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { amount, board, chart, draw, flip, rowChart, stageChart, strip, subChart, teamChart, pixelFox, lines, choose, costumeOf, parseLines, parseTitles, thinkPrompt, driftPrompt, parseVerdict, parseThought, isNewer, isOurs, isRoom, BLESSING, nameIn, makeNow, newKey, ticks, isCall, replyPrompt, matesChart, clock, chatChart, initials, wrap, roomHead, hourLine, focusLine, ago, markCard, fresh, NAHJ, arrowPlate, prayerList } from './register'
+import { amount, board, chart, draw, flip, rowChart, stageChart, strip, subChart, teamChart, pixelFox, lines, choose, costumeOf, parseLines, parseTitles, thinkPrompt, driftPrompt, parseVerdict, parseThought, isNewer, isOurs, isRoom, BLESSING, nameIn, makeNow, newKey, ticks, isCall, replyPrompt, matesChart, clock, chatChart, initials, wrap, roomHead, hourLine, focusLine, ago, markCard, fresh, NAHJ, arrowPlate, prayerList, openSteps, trackPrompt, parseTrack, applyTrack } from './register'
 
 const MAP = {
   goal: 'هدف',
@@ -504,4 +504,18 @@ test('the prayer times of Kuwait are read as moments in UTC', async () => {
   expect(list[0]?.at).toBe(Date.UTC(2026, 9, 14, 1, 29))
   expect(list[1]?.at).toBe(Date.UTC(2026, 9, 14, 8, 34))
   expect(list[2]?.at).toBe(Date.UTC(2026, 9, 14, 14, 34))
+})
+
+test('Foxy tracks the map itself from the agent answers', () => {
+  const map = { goal: 'g', stages: [{ title: 'a', items: [{ t: 'one', s: 'done' }, { t: 'two', s: 'todo', sub: [{ t: 'x', s: 'todo' }] }] }] }
+  expect(openSteps(map)).toEqual(['0.1 [todo] two', '0.1.0 [todo] x'])
+  expect(trackPrompt(map, [{ asked: 'q', answer: 'a' }]).includes('- q -> a')).toBe(true)
+  const told = parseTrack('ok {"set": {"0.1": "doing", "0.1.0": "done", "9": "done", "0.0": "bad"}, "focus": {"t": "شغل", "side": false}}')
+  expect(told.set).toEqual({ '0.1': 'doing', '0.1.0': 'done' })
+  const next = applyTrack(map, told, '2026-11-03')
+  expect(next.stages[0].items[1].s).toBe('doing')
+  expect(next.stages[0].items[1].sub?.[0].s).toBe('done')
+  expect(next.updated).toBe('2026-11-03')
+  expect(next.focus).toEqual({ t: 'شغل', side: false })
+  expect(parseTrack('nonsense').set).toEqual({})
 })
